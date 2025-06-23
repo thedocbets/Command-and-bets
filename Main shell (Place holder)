@@ -1,0 +1,174 @@
+import streamlit as st
+st.set_page_config(page_title="MLB Betting Assistant", layout="wide")
+
+import pandas as pd
+
+# --- PAGE SETUP ---
+st.title("⚾ MLB Betting Model Assistant")
+
+# --- GAME MODEL SECTION ---
+st.header("Game Model")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    home_team = st.selectbox("Select Home Team", ['ARI DIAMONDBACKS', 'ATL BRAVES', 'BAL ORIOLES', 'BOS REDSOX', 'CHC CUBS', 'CHW WHITE SOX', 'CIN REDS', 'CLE GUARDIANS', 'COL ROCKIES', 'DET TIGERS', 'HOU ASTROS', 'KCR ROYALS', 'LAA ANGELS', 'LAD DODGERS', 'MIA MARLINS', 'MIL BREWERS', 'MIN TWINS', 'NYM METS', 'NYY YANKEES', 'OAK ATHLETICS', 'PHI PHILLIES', 'PIT PIRATES', 'SDP PADRES', 'SEA MARINERS', 'SFG GIANTS', 'STL CARDINALS', 'TBR RAYS', 'TEX RANGERS', 'TOR BLUE JAYS', 'WSN NATIONALS'])
+    away_team = st.selectbox("Select Away Team", ['ARI DIAMONDBACKS', 'ATL BRAVES', 'BAL ORIOLES', 'BOS REDSOX', 'CHC CUBS', 'CHW WHITE SOX', 'CIN REDS', 'CLE GUARDIANS', 'COL ROCKIES', 'DET TIGERS', 'HOU ASTROS', 'KCR ROYALS', 'LAA ANGELS', 'LAD DODGERS', 'MIA MARLINS', 'MIL BREWERS', 'MIN TWINS', 'NYM METS', 'NYY YANKEES', 'OAK ATHLETICS', 'PHI PHILLIES', 'PIT PIRATES', 'SDP PADRES', 'SEA MARINERS', 'SFG GIANTS', 'STL CARDINALS', 'TBR RAYS', 'TEX RANGERS', 'TOR BLUE JAYS', 'WSN NATIONALS'])
+    home_starter = st.text_input("Home Starting Pitcher")
+    away_starter = st.text_input("Away Starting Pitcher")
+    confirmed_lineups = st.checkbox("Lineups Confirmed?")
+
+with col2:
+    st.markdown("**Run Line**")
+    col_rl1, col_rl2 = st.columns([1, 1])
+    run_line_home = col_rl1.text_input("Home Run Line (e.g., -1.5)")
+    run_line_home_odds = col_rl2.text_input("Home RL Odds (e.g., -110)")
+
+    run_line_away = col_rl1.text_input("Away Run Line (e.g., +1.5)")
+    run_line_away_odds = col_rl2.text_input("Away RL Odds (e.g., -105)")
+
+    st.markdown("**Game Total**")
+    col_tot1, col_tot2 = st.columns([1, 1])
+    total_over = col_tot1.text_input("Total Over (e.g., 8.5)")
+    total_over_odds = col_tot2.text_input("Over Odds (e.g., -115)")
+
+    total_under = col_tot1.text_input("Total Under (e.g., 8.5)")
+    total_under_odds = col_tot2.text_input("Under Odds (e.g., -105)")
+
+    moneyline_home = st.text_input("Home Moneyline")
+    moneyline_away = st.text_input("Away Moneyline")
+
+st.markdown("---")
+
+st.subheader("Model Options")
+span = st.selectbox("Game Span for Stats", [5, 10, 15, 30])
+include_home_away = st.checkbox("Include Home/Away Splits")
+include_pitch_splits = st.checkbox("Include Pitch Type Splits")
+include_day_night = st.checkbox("Include Day/Night Splits")
+include_rest_fatigue = st.checkbox("Include Rest Days/Fatigue")
+include_ballpark = st.checkbox("Include Ballpark Factor")
+
+if st.button("Run Game Model"):
+    st.success("[Placeholder] Game model run successfully!")
+    # --- Calculate implied probability from odds ---
+    def implied_prob(odds):
+        try:
+            odds = float(odds)
+            if odds < 0:
+                return round((-odds) / (-odds + 100), 4)
+            else:
+                return round(100 / (odds + 100), 4)
+        except:
+            return None
+
+    st.subheader("Market Implied Probabilities")
+
+    cols = st.columns(3)
+    with cols[0]:
+        imp_home_ml = implied_prob(moneyline_home)
+        st.metric("Home ML Implied %", f"{imp_home_ml * 100:.1f}%" if imp_home_ml else "N/A")
+
+    with cols[1]:
+        imp_away_ml = implied_prob(moneyline_away)
+        st.metric("Away ML Implied %", f"{imp_away_ml * 100:.1f}%" if imp_away_ml else "N/A")
+
+    with cols[2]:
+        # Simple logistic regression-style win probability model
+        try:
+            h_factor = h_summary['K%'] - h_summary['BB%'] + h_summary['Whiff%'] + h_summary['CSW%']
+            a_factor = a_summary['K%'] - a_summary['BB%'] + a_summary['Whiff%'] + a_summary['CSW%']
+            ho_factor = ho['AVG'] * 100 + ho['SLG Proxy'] - ho['Whiff%']
+            ao_factor = ao['AVG'] * 100 + ao['SLG Proxy'] - ao['Whiff%']
+
+            # Home pitcher strength vs. away offense, and vice versa
+            home_score = h_factor - ao_factor
+            away_score = a_factor - ho_factor
+
+            total = home_score + away_score if (home_score + away_score) != 0 else 1
+            model_home_win_prob = round((home_score / total), 4)
+            model_away_win_prob = 1 - model_home_win_prob
+        except:
+            model_home_win_prob = 0.5
+            model_away_win_prob = 0.5
+
+        ev = (model_home_win_prob - imp_home_ml) * 100 if imp_home_ml else None
+        st.metric("Home ML EV %", f"{ev:.2f}%" if ev is not None else "N/A")
+
+        # --- Starter Statcast Pull ---
+    from mlb_data_lab.player import Player
+    from mlb_data_lab.team import Team
+
+    try:
+        home_pitcher = Player(home_starter)
+        away_pitcher = Player(away_starter)
+
+        # Filter recent games (by span)
+        home_pitch_data = home_pitcher.statcast_data.tail(span)
+        away_pitch_data = away_pitcher.statcast_data.tail(span)
+
+        def summarize_pitching(df):
+            return {
+                "Avg Velo": df['release_speed'].mean(),
+                "K%": df['description'].str.contains('strikeout').mean() * 100,
+                "Whiff%": df['description'].str.contains('swinging_strike').mean() * 100,
+                "BB%": df['description'].str.contains('walk').mean() * 100,
+                "CSW%": ((df['description'].str.contains('called_strike') | df['description'].str.contains('swinging_strike')).mean()) * 100
+            }
+
+        st.subheader(f"Starter Stats (Last {span} Games)")
+        h_summary = summarize_pitching(home_pitch_data)
+        a_summary = summarize_pitching(away_pitch_data)
+
+        st.write(f"**{home_starter}** - Velo: {h_summary['Avg Velo']:.1f} | K%: {h_summary['K%']:.1f} | Whiff%: {h_summary['Whiff%']:.1f} | BB%: {h_summary['BB%']:.1f} | CSW%: {h_summary['CSW%']:.1f}")
+        st.write(f"**{away_starter}** - Velo: {a_summary['Avg Velo']:.1f} | K%: {a_summary['K%']:.1f} | Whiff%: {a_summary['Whiff%']:.1f} | BB%: {a_summary['BB%']:.1f} | CSW%: {a_summary['CSW%']:.1f}")
+
+        # --- Opponent Split Stats ---
+        home_team_obj = Team(home_team)
+        away_team_obj = Team(away_team)
+
+        home_offense = home_team_obj.statcast_data.tail(span)
+        away_offense = away_team_obj.statcast_data.tail(span)
+
+        def summarize_hitting(df):
+            return {
+                "AVG": df['launch_speed'].mean() / 100,
+                "SLG Proxy": df['launch_angle'].mean(),
+                "Whiff%": df['description'].str.contains('swinging_strike').mean() * 100
+            }
+
+        st.subheader(f"Opponent Offense Splits (Last {span} Games)")
+        ho = summarize_hitting(home_offense)
+        ao = summarize_hitting(away_offense)
+
+        st.write(f"**{home_team} vs {away_starter}** - AVG: {ho['AVG']:.3f} | SLG~: {ho['SLG Proxy']:.1f} | Whiff%: {ho['Whiff%']:.1f}")
+        st.write(f"**{away_team} vs {home_starter}** - AVG: {ao['AVG']:.3f} | SLG~: {ao['SLG Proxy']:.1f} | Whiff%: {ao['Whiff%']:.1f}")
+
+    except Exception as e:
+        st.error(f"Error loading data: {e}")
+
+# --- PLAYER PROP MODEL SECTION ---
+st.header("Player Prop Model")
+
+col3, col4 = st.columns(2)
+with col3:
+    player_name = st.text_input("Player Name")
+    prop_type = st.selectbox("Prop Type", ["Strikeouts", "Hits", "Total Bases", "Walks", "Runs", "Home Runs"])
+    prop_odds = st.text_input("Odds (e.g., -110)")
+    bet_amount = st.number_input("Bet Amount ($)", min_value=0.0, value=0.0, step=1.0)
+
+with col4:
+    if st.button("Run Prop Model"):
+        st.success("[Placeholder] Prop model run successfully!")
+        # Future: Show EV, true %, etc.
+
+        st.metric(label="Model True %", value="65%")
+        st.metric(label="EV %", value="+12.4%")
+        st.metric(label="Simulated ROI", value="$8.25")
+
+if st.button("Place Bet"):
+    st.info("[Placeholder] Bet logged successfully!")
+
+# --- FUTURE: Results Log Table ---
+# st.dataframe(log_df)
+
+# --- END ---
